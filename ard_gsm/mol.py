@@ -4,12 +4,19 @@
 import os
 
 import numpy as np
-import pybel
 from rdkit import Chem
 from rdkit.Chem import AllChem, GetPeriodicTable
 
 _rdkit_periodic_table = GetPeriodicTable()
 RDKIT_SMILES_PARSER_PARAMS = Chem.SmilesParserParams()
+
+try:
+    from openbabel import pybel
+except ImportError:
+    try:
+        import pybel
+    except ImportError:
+        pass
 
 
 def smiles_to_rdkit(smi, gen_3d=True, nconf=100):
@@ -722,12 +729,10 @@ class MolGraph(object):
         atoms.sort(key=lambda a: a.idx)
         return [atom.symbol for atom in atoms], np.array([atom.coords for atom in atoms])
 
-    def infer_connections(self, use_ob=True):
+    def infer_connections(self, use_ob=False):
         """
         Delete connections and set them again based on coordinates.
-
-        Note: By default this uses Open Babel, which is better than a
-        simple covalent radii check.
+        默认使用基于共价半径的简单连接检查，不再依赖OpenBabel
         """
         atoms = self.atoms
 
@@ -738,29 +743,19 @@ class MolGraph(object):
             for connection in atom.connections:
                 self.remove_connection(connection)
 
-        if use_ob:
-            pybel_mol = self.to_pybel_mol()  # Should be sorted by atom indices
-            assert all(ap.idx == a.idx for ap, a in zip(pybel_mol, self))  # Check to be sure
-            mapping = {ap.idx: a for ap, a in zip(pybel_mol, self)}
-            for bond in pybel.ob.OBMolBondIter(pybel_mol.OBMol):
-                atom1 = mapping[bond.GetBeginAtomIdx()]
-                atom2 = mapping[bond.GetEndAtomIdx()]
-                connection = Connection(atom1, atom2)
-                self.add_connection(connection)
-        else:
-            sorted_atoms = sorted(atoms, key=lambda a: a.coords[2])
-            for i, atom1 in enumerate(sorted_atoms):
-                for atom2 in sorted_atoms[(i+1):]:
-                    crit_dist = (atom1.get_cov_rad() + atom2.get_cov_rad() + 0.45)**2
-                    z_boundary = (atom1.coords[2] - atom2.coords[2])**2
-                    if z_boundary > 16.0:
-                        break
-                    dist_sq = sum((atom1.coords - atom2.coords)**2)
-                    if dist_sq > crit_dist or dist_sq < 0.4:
-                        continue
-                    else:
-                        connection = Connection(atom1, atom2)
-                        self.add_connection(connection)
+        sorted_atoms = sorted(atoms, key=lambda a: a.coords[2])
+        for i, atom1 in enumerate(sorted_atoms):
+            for atom2 in sorted_atoms[(i+1):]:
+                crit_dist = (atom1.get_cov_rad() + atom2.get_cov_rad() + 0.45)**2
+                z_boundary = (atom1.coords[2] - atom2.coords[2])**2
+                if z_boundary > 16.0:
+                    break
+                dist_sq = sum((atom1.coords - atom2.coords)**2)
+                if dist_sq > crit_dist or dist_sq < 0.4:
+                    continue
+                else:
+                    connection = Connection(atom1, atom2)
+                    self.add_connection(connection)
 
     def is_atom_in_cycle(self, atom):
         return self._is_chain_in_cycle([atom])
